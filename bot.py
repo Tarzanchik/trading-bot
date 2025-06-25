@@ -14,6 +14,28 @@ load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 
+
+DEFAULT_TIMEOUT = 10
+
+
+class DataFetchError(Exception):
+    """Raised when a network request fails."""
+
+
+class TimeoutSession(requests.Session):
+    """Requests session with default timeout."""
+
+    def __init__(self, timeout: int = DEFAULT_TIMEOUT) -> None:
+        super().__init__()
+        self._timeout = timeout
+
+    def request(self, *args, **kwargs):
+        kwargs.setdefault("timeout", self._timeout)
+        return super().request(*args, **kwargs)
+
+
+_session = TimeoutSession(DEFAULT_TIMEOUT)
+
 def fetch_moex_history(ticker: str, days: int = 180) -> pd.DataFrame:
     """Return historical close prices from MOEX ISS API."""
     end = datetime.now()
@@ -29,7 +51,7 @@ def fetch_moex_history(ticker: str, days: int = 180) -> pd.DataFrame:
         "history.columns": "TRADEDATE,CLOSE",
     }
     try:
-        r = requests.get(url, params=params, timeout=10)
+        r = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
         r.raise_for_status()
         payload = r.json()
         rows = payload.get("history", {}).get("data", [])
@@ -42,7 +64,7 @@ def fetch_moex_history(ticker: str, days: int = 180) -> pd.DataFrame:
         return df[["Close"]].dropna()
     except Exception as e:
         logging.exception("Failed to fetch MOEX history for %s", ticker)
-        return pd.DataFrame()
+        raise DataFetchError(f"MOEX history error: {e}")
 
 
 def fetch_price_moex(ticker: str) -> float | None:
@@ -53,53 +75,76 @@ def fetch_price_moex(ticker: str) -> float | None:
     )
     params = {"iss.only": "marketdata", "marketdata.columns": "LAST"}
     try:
-        r = requests.get(url, params=params, timeout=10)
+        r = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
         r.raise_for_status()
         payload = r.json()
         rows = payload.get("marketdata", {}).get("data", [])
         if rows and rows[0][0] is not None:
             return float(rows[0][0])
-    except Exception:
+    except Exception as e:
         logging.exception("Failed to fetch MOEX price for %s", ticker)
+        raise DataFetchError(f"MOEX price error: {e}")
+
     return None
 
 
 def fetch_yahoo_history(ticker: str, period: str = "6mo") -> pd.DataFrame:
     """Return historical data using Yahoo Finance."""
     try:
-        data = yf.download(ticker, period=period, progress=False)
+        data = yf.download(ticker, period=period, progress=False, session=_session)
         return data[["Close"]]
-    except Exception:
+    except Exception as e:
         logging.exception("Failed to fetch Yahoo history for %s", ticker)
-        return pd.DataFrame()
+        raise DataFetchError(f"Yahoo history error: {e}")
 
 
 def fetch_price_yahoo(ticker: str) -> float | None:
     """Get current price from Yahoo Finance."""
     try:
-        info = yf.Ticker(ticker)
+        info = yf.Ticker(ticker, session=_session)
         data = info.history(period="1d")
         if not data.empty:
             return float(data["Close"].iloc[-1])
-    except Exception:
+    except Exception as e:
         logging.exception("Failed to fetch Yahoo price for %s", ticker)
+        raise DataFetchError(f"Yahoo price error: {e}")
     return None
 
 
-def get_history(ticker: str) -> pd.DataFrame:
+def get_history(ticker: str) -> tuple[pd.DataFrame, list[str]]:
     """Fetch history from MOEX with fallback to Yahoo."""
-    data = fetch_moex_history(ticker)
+    errors: list[str] = []
+    try:
+        data = fetch_moex_history(ticker)
+    except DataFetchError as e:
+        errors.append(str(e))
+        data = pd.DataFrame()
+
     if data.empty:
-        data = fetch_yahoo_history(ticker)
-    return data
+        try:
+            data = fetch_yahoo_history(ticker)
+        except DataFetchError as e:
+            errors.append(str(e))
+
+    return data, errors
 
 
-def get_price(ticker: str) -> float | None:
+def get_price(ticker: str) -> tuple[float | None, list[str]]:
     """Fetch latest price from MOEX with fallback to Yahoo."""
-    price = fetch_price_moex(ticker)
+    errors: list[str] = []
+    try:
+        price = fetch_price_moex(ticker)
+    except DataFetchError as e:
+        errors.append(str(e))
+        price = None
+
     if price is None:
-        price = fetch_price_yahoo(ticker)
-    return price
+        try:
+            price = fetch_price_yahoo(ticker)
+        except DataFetchError as e:
+            errors.append(str(e))
+
+    return price, errors
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a welcome message."""
@@ -111,9 +156,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def analyze_ticker(ticker: str) -> str:
     """Fetch data for *ticker* and return a recommendation."""
-    data = get_history(ticker)
+    data, errors = get_history(ticker)
     if data.empty:
-        return f"No data available for {ticker}"
+        msg = [f"No data available for {ticker}"]
+        if errors:
+            msg.append("Errors:")
+            msg.extend(errors)
+        return "\n".join(msg)
 
     # indicators
     data["ma_short"] = data["Close"].rolling(window=5).mean()
@@ -152,6 +201,11 @@ def analyze_ticker(ticker: str) -> str:
     else:
         msg.append("No clear signal.")
 
+    if errors:
+        msg.append("")
+        msg.append("Errors:")
+        msg.extend(errors)
+
     return "\n".join(msg)
 
 
@@ -175,11 +229,20 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     ticker = context.args[0].upper()
     await update.message.reply_text("Fetching price...")
-    price_value = get_price(ticker)
+    price_value, errors = get_price(ticker)
     if price_value is None:
-        await update.message.reply_text(f"Could not fetch price for {ticker}")
+        msg = [f"Could not fetch price for {ticker}"]
+        if errors:
+            msg.append("Errors:")
+            msg.extend(errors)
+        await update.message.reply_text("\n".join(msg))
     else:
-        await update.message.reply_text(f"*{ticker}* current price: {price_value:.2f}", parse_mode="Markdown")
+        text = f"*{ticker}* current price: {price_value:.2f}"
+        if errors:
+            text += "\n" + "\n".join(errors)
+            await update.message.reply_text(text)
+        else:
+            await update.message.reply_text(text, parse_mode="Markdown")
 
 
 def main() -> None:

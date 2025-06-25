@@ -3,6 +3,8 @@ Trading Bot
 
 This Telegram bot collects stock data from the Moscow Exchange when possible and falls back to Yahoo Finance. It performs basic technical analysis and can show the latest price. **Use at your own risk. This is not professional financial advice.**
 
+All network requests use a 10 second timeout, and any connection failures are reported to the user.
+
 Setup
 -----
 1. Install dependencies:
