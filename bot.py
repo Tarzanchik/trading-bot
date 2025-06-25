@@ -6,8 +6,6 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from dotenv import load_dotenv
 load_dotenv()
 
-token = os.getenv("TELEGRAM_TOKEN")
-
 
 logging.basicConfig(level=logging.INFO)
 
@@ -71,4 +69,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-print(f"TOKEN loaded: {token}")

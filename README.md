@@ -7,8 +7,10 @@ Setup
 -----
 1. Install dependencies:
    ```bash
-   pip install python-telegram-bot yfinance
+   pip install -r requirements.txt
    ```
+   This project uses **python-dotenv** to load environment variables from a
+   `.env` file.
 2. Set your Telegram bot token in the environment:
    ```bash
    export TELEGRAM_TOKEN="<your token here>"
