@@ -1,7 +1,7 @@
 Trading Bot
 ==========
 
-This Telegram bot collects stock data, performs simple trend analysis, and provides buy or sell suggestions. The logic relies on moving-average comparison to guess potential market direction. **Use at your own risk. This is not professional financial advice.**
+This Telegram bot collects stock data from the Moscow Exchange when possible and falls back to Yahoo Finance. It performs basic technical analysis and can show the latest price. **Use at your own risk. This is not professional financial advice.**
 
 Setup
 -----
@@ -19,3 +19,8 @@ Setup
    ```bash
    python bot.py
    ```
+
+Commands
+--------
+- `/price <TICKER>` — show the latest price from MOEX (fallback to Yahoo)
+- `/recommend <TICKER>` — moving average, RSI and MACD analysis
